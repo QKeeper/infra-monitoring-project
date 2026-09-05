@@ -1,0 +1,26 @@
+# Logs
+*.log
+access.log
+
+# Temporary and cache files
+*.tmp
+*.temp
+*~
+*.swp
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE & editors
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# Build artifacts & archives
+*.tar
+*.tar.gz
+*.zip
+*.7z
