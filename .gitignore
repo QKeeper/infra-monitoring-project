@@ -24,3 +24,16 @@ desktop.ini
 *.tar.gz
 *.zip
 *.7z
+
+# Build output directories
+build/
+dist/
+
+# Environment variables
+.env
+.env.*
+
+# Network capture and TLS secrets
+*.pcap
+*.pcapng
+*sslkeys*
