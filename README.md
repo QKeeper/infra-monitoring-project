@@ -92,3 +92,171 @@
 - Отсутствие PR или слияние без описания: -5 баллов
 - Скрипты не используют awk или regexp: -10 баллов
 - CI/CD пайплайн не проходит: -10 баллов
+
+---
+
+# Выполненное решение
+
+## Архитектура и состав проекта
+
+Репозиторий содержит законченное решение для мониторинга доступности сервисов, синтаксического и статистического анализа журналов, локального стека проксирования на базе Docker Compose и автоматизированного тестирования через GitHub Actions:
+
+```
+infra-monitoring-project/
+├── .gitattributes             # Принудительные LF-окончания для .sh, .yml, .conf, .md
+├── .gitignore                 # Исключение *.log, временных файлов, артефактов и дампов
+├── .github/
+│   └── workflows/
+│       └── ci.yml             # GitHub Actions CI пайплайн (bash -n и проверка API)
+├── check_api.sh               # Скрипт проверки доступности API через curl (HTTP 200)
+├── analyze_logs.sh            # Генератор 300 строк access.log и анализатор (awk, grep, sed)
+├── docker-compose.yml         # Стек hashicorp/http-echo (api) и nginx:alpine (proxy)
+├── nginx/
+│   └── default.conf           # Конфигурация обратного прокси nginx (порт 80 -> api:8080)
+└── README.md                  # Постановка задачи, документация и руководство по деплою
+```
+
+## Инструкция по локальному запуску
+
+### 1. Требования к окружению
+- Bash-совместимая оболочка (в Windows рекомендуется **Git Bash**).
+- Установленный **Docker Engine** / **Docker Desktop** с плагином **Docker Compose v2+**.
+- Утилиты `curl`, `awk`, `grep`, `sed`, `sort`, `uniq`.
+
+### 2. Использование Bash-скриптов
+
+#### Мониторинг доступности API (`check_api.sh`):
+```bash
+# Сделать скрипт исполняемым (уже задано в Git):
+chmod +x check_api.sh
+
+# Проверка успешного статуса (HTTP 200 -> "API доступен", exit 0):
+./check_api.sh https://httpbin.org/status/200
+echo "Exit code: $?"
+
+# Проверка недоступного статуса (HTTP 404 -> "API недоступен, код ответа: 404", exit 1):
+./check_api.sh https://httpbin.org/status/404
+echo "Exit code: $?"
+
+# Проверка сетевой ошибки (закрытый порт -> "API недоступен, код ответа: 000", exit 1):
+./check_api.sh http://127.0.0.1:1
+echo "Exit code: $?"
+```
+
+#### Генерация и анализ логов (`analyze_logs.sh`):
+```bash
+chmod +x analyze_logs.sh
+
+# Запуск анализатора (детерминированно формирует access.log из 300 строк рядом со скриптом):
+./analyze_logs.sh
+```
+
+Пример вывода:
+```text
+Всего запросов: 300
+Топ-3 IP-адреса:
+192.168.1.10: 120 запросов
+10.0.0.5: 90 запросов
+172.16.0.3: 60 запросов
+Запросов 4xx: 60
+Запросов 5xx: 30
+```
+
+### 3. Запуск контейнеризированного стека (Docker Compose)
+
+Стек состоит из двух компонентов:
+1. **`api`** (`hashicorp/http-echo`): слушает порт `8080` внутри изолированной bridge-сети `monitoring` и отвечает текстом `"Monitoring Service Active\n"`. Внешний порт на хост-машину намеренно **не публикуется**.
+2. **`proxy`** (`nginx:alpine`): опубликован на `127.0.0.1:80` хоста и транслирует входящие запросы по DNS-имени `http://api:8080`.
+
+```bash
+# Проверка конфигурации Compose:
+docker compose config
+
+# Запуск сервисов в фоновом режиме:
+docker compose up -d
+
+# Просмотр статуса контейнеров:
+docker compose ps
+
+# Тестирование синтаксиса Nginx внутри контейнера:
+docker compose exec -T proxy nginx -t
+
+# Проверка ответа через локальный обратный прокси:
+curl --noproxy "*" -i http://localhost:80
+
+# Проверка прокси с помощью скрипта check_api.sh:
+./check_api.sh http://localhost:80
+
+# Остановка и удаление контейнеров и сети:
+docker compose down
+```
+
+## Инструкция по безопасной передаче и деплою (SSH / SCP)
+
+Ниже приведён эталонный процесс переноса и развёртывания проекта на удалённый Linux-сервер (например, `server.example.com`) под управлением пользователя `deploy`.
+
+> **Примечание:** Данный раздел документирует процедуру безопасного деплоя в соответствии с требованиями Этапа 6.
+
+### 1. Генерация пары SSH-ключей
+Рекомендуется использовать современный и криптографически стойкий алгоритм **Ed25519**:
+```bash
+# Создание нового ключа с парольной фразой (passphrase):
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_infra_monitoring -C "deploy-infra-monitoring"
+```
+Команда генерирует:
+- `~/.ssh/id_ed25519_infra_monitoring` — приватный ключ (хранится строго на локальной машине, права `600`).
+- `~/.ssh/id_ed25519_infra_monitoring.pub` — публичный ключ (передаётся на удалённый сервер).
+
+### 2. Копирование публичного ключа на сервер
+Для добавления публичного ключа в файл `~/.ssh/authorized_keys` удалённого пользователя используется утилита `ssh-copy-id`:
+```bash
+REMOTE="deploy@server.example.com"
+
+# Копирование ключа (потребуется однократный ввод пароля учётной записи deploy):
+ssh-copy-id -i ~/.ssh/id_ed25519_infra_monitoring.pub "$REMOTE"
+```
+*Перед первым подтверждением подключения обязательно сверяется fingerprint хост-ключа сервера по независимому доверенному каналу.*
+
+### 3. Упаковка и безопасная передача проекта через SCP
+Чтобы не передавать локальные временные файлы, историю IDE или дампы трафика, архив формируется напрямую из актуального коммита Git (`git archive`):
+```bash
+# 1. Формирование чистого tar.gz архива из HEAD ветки:
+git archive --format=tar.gz --output=../infra-monitoring-project.tar.gz HEAD
+
+# 2. Подготовка целевой директории на удалённом сервере:
+ssh -i ~/.ssh/id_ed25519_infra_monitoring "$REMOTE" "mkdir -p ~/infra-monitoring-project"
+
+# 3. Безопасное копирование архива через SCP:
+scp -i ~/.ssh/id_ed25519_infra_monitoring \
+    ../infra-monitoring-project.tar.gz \
+    "${REMOTE}:~/infra-monitoring-project.tar.gz"
+```
+
+### 4. Распаковка, запуск и проверка на удалённом сервере
+```bash
+ssh -i ~/.ssh/id_ed25519_infra_monitoring "$REMOTE" '
+    set -euo pipefail
+    tar -xzf ~/infra-monitoring-project.tar.gz -C ~/infra-monitoring-project
+    rm -f ~/infra-monitoring-project.tar.gz
+    cd ~/infra-monitoring-project
+
+    # Запуск Docker Compose стека
+    docker compose down --remove-orphans || true
+    docker compose up -d
+
+    # Проверка доступности через локальный curl на сервере
+    ./check_api.sh http://localhost:80
+'
+```
+
+## Непрерывная интеграция (GitHub Actions)
+
+В репозитории настроен рабочий процесс `.github/workflows/ci.yml`, запускаемый автоматически на каждое событие `pull_request` в ветку `main`. Пайплайн выполняет:
+1. Проверку синтаксиса скриптов утилитой `bash -n`:
+   - `bash -n check_api.sh`
+   - `bash -n analyze_logs.sh`
+2. Функциональное тестирование мониторинга реального внешнего API:
+   - `./check_api.sh https://httpbin.org/status/200` с контролем кода возврата `0`.
+
+История запусков и статусы проверок доступны на вкладке **Actions** репозитория:
+https://github.com/QKeeper/infra-monitoring-project/actions
